@@ -67,9 +67,31 @@ class QState:
             Each generator must also be independent
         '''
         assert len(s_gen) == len(d_gen) == len(s_phase) == len(d_phase)
-        # todo: check commutivity
-        # todo: check independence 
-        #       S is linearly independent and -I ∉ S, Nielsen and Chuang QC&QI 10.3
+
+        n = len(s_gen)
+        def commute(g, h):
+            return sum(self.levi_civita_mod4(gi, hi, gi ^ hi) for gi, hi in zip(g, h)) % 2 == 0
+
+        # corresponding pairs don't commute O(n)
+        for pi, qi in zip(s_gen, d_gen):
+            assert not commute(pi, qi)
+        # stabilizers self commute O(n^2)
+        for i, pi in enumerate(s_gen):
+            for pj in s_gen[i + 1:]:
+                assert commute(pi, pj)
+        # destabilizers self commute O(n^2)
+        for i, qi in enumerate(d_gen):
+            for qj in d_gen[i + 1:]:
+                assert commute(qi, qj)
+        # stabilizers commute with destabilizers O(n^2)
+        for i, pi in enumerate(s_gen):
+            for j, qj in enumerate(d_gen):
+                if i == j: continue
+                assert commute(pi, qj)
+        # stabilizers and destabilizers produce the full paulis
+        paulis = { self.X, self.Y, self.Z }
+        for g_k in zip(*s_gen, *d_gen):
+            assert len(set(g_k) & paulis) > 1
 
         self.s_gen = s_gen
         self.s_phase = s_phase

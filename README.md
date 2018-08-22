@@ -56,7 +56,7 @@ S----
 
 The outcome of a measurement can affect the state
 ```
->>> measure = QCircuit.from_str("M0 M1 M2 M3")
+>>> measure = QCircuit.from_str("M0 M1 M2")
 >>> measure(s)
 ...
 >>> print(measure)

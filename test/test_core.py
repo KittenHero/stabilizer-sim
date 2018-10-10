@@ -1,8 +1,21 @@
 from stabilizer_sim import *
 from unittest import TestCase, main, mock
 
-I, X, Y, Z = QState.I, QState.X, QState.Y, QState.Z
+I, X, Y, Z = GeneralPauli.I, GeneralPauli.X, GeneralPauli.Y, GeneralPauli.Z
 ket = '{}|{}⟩'.format
+
+
+class GateTest(TestCase):
+
+    def assert_gate_transform(self, gate, inputs, outputs, signflip):
+        for i, o, s in zip(inputs, outputs, signflip):
+            pi, po = GeneralPauli.identity(), GeneralPauli.identity()
+            pi.update(enumerate(i))
+            po.update(enumerate(o))
+            po.phase = s
+            gate.transform_generator(pi)
+            self.assertEqual(pi, po)
+
 
 class TestQState(TestCase):
     '''
@@ -53,7 +66,7 @@ class TestQState(TestCase):
         self.assertEqual(q4.ket(), ket('+', '0000'))
 
 
-class TestPhase(TestCase):
+class TestPhase(GateTest):
     '''
     {I,Z} ->  {I,Z}
       X   ->    Y
@@ -66,12 +79,10 @@ class TestPhase(TestCase):
         outputs  = [[I], [Y], [X], [Z]]
         signflip = [  0,   0,   1,   0]
 
-        for i, o, s in zip(inputs, outputs, signflip):
-            self.assertEqual(s0.transform_generator(i), s)
-            self.assertEqual(i, o)
+        self.assert_gate_transform(s0, inputs, outputs, signflip)
 
 
-class TestHadamard(TestCase):
+class TestHadamard(GateTest):
     '''
     I ->  I
     X ->  Z
@@ -84,12 +95,10 @@ class TestHadamard(TestCase):
         outputs  = [[I], [Z], [Y], [X]]
         signflip = [  0,   0,   1,   0]
 
-        for i, o, s in zip(inputs, outputs, signflip):
-            self.assertEqual(h0.transform_generator(i), s)
-            self.assertEqual(i, o)
+        self.assert_gate_transform(h0, inputs, outputs, signflip)
 
 
-class TestCNot(TestCase):
+class TestCNot(GateTest):
     '''
     {II,ZI,IX,ZX} ->  {II,ZI,IX,ZX}
        {IZ,IY}    ->     {ZZ,ZY}
@@ -116,9 +125,7 @@ class TestCNot(TestCase):
         outputs  += [[Y, Z], [X, Y], [Y, Y], [X, Z]]
         signflip += [     0,      0,      1,      1]
 
-        for i, o, s in zip(inputs, outputs, signflip):
-            self.assertEqual(cx01.transform_generator(i), s)
-            self.assertEqual(i, o)
+        self.assert_gate_transform(cx01, inputs, outputs, signflip)
 
 
 class TestMeasure(TestCase):

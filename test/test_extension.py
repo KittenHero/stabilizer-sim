@@ -1,11 +1,9 @@
 from stabilizer_sim import *
 from unittest import TestCase, main, mock
-
-I, X, Y, Z = QState.I, QState.X, QState.Y, QState.Z
-ket = '{}|{}⟩'.format
+from test.test_core import GateTest, I, X, Y, Z, ket
 
 
-class TestX(TestCase):
+class TestX(GateTest):
     '''
     {I,X} ->  {I,X}
     {Z,Y} -> -{Z,Y}
@@ -17,12 +15,10 @@ class TestX(TestCase):
         outputs  = [[I], [X], [Y], [Z]]
         signflip = [  0,   0,   1,   1]
 
-        for i, o, s in zip(inputs, outputs, signflip):
-            self.assertEqual(x0.transform_generator(i), s)
-            self.assertEqual(i, o)
+        self.assert_gate_transform(x0, inputs, outputs, signflip)
 
 
-class TestZ(TestCase):
+class TestZ(GateTest):
     '''
     {I,Z} ->  {I,Z}
     {X,Y} -> -{X,Y}
@@ -34,12 +30,11 @@ class TestZ(TestCase):
         outputs  = [[I], [X], [Y], [Z]]
         signflip = [  0,   1,   1,   0]
 
-        for i, o, s in zip(inputs, outputs, signflip):
-            self.assertEqual(z0.transform_generator(i), s)
-            self.assertEqual(i, o)
+        self.assert_gate_transform(z0, inputs, outputs, signflip)
 
 
-class TestSwap(TestCase):
+
+class TestSwap(GateTest):
     '''
     {II,XX,YY,ZZ} -> {II,XX,YY,ZZ}
       {IX,IY,IZ}  ->  {XI,YI,ZI}
@@ -64,12 +59,10 @@ class TestSwap(TestCase):
         outputs  += [[Z, X], [X, Z], [Y, Z], [Z, Y]]
         signflip += [     0,      0,      0,      0]
 
-        for i, o, s in zip(inputs, outputs, signflip):
-            self.assertEqual(swap01.transform_generator(i), s)
-            self.assertEqual(i, o)
+        self.assert_gate_transform(swap01, inputs, outputs, signflip)
 
 
-class TestCZ(TestCase):
+class TestCZ(GateTest):
     '''
     {II,ZI,IZ,ZZ} ->  {II,ZI,IZ,ZZ}
        {IX,IY}    ->     {ZX,ZY}
@@ -96,9 +89,8 @@ class TestCZ(TestCase):
         outputs  += [[Y, Y], [X, X], [Y, X], [X, Y]]
         signflip += [     1,      1,      1,      1]
 
-        for i, o, s in zip(inputs, outputs, signflip):
-            self.assertEqual(cz01.transform_generator(i), s)
-            self.assertEqual(i, o)
+        self.assert_gate_transform(cz01, inputs, outputs, signflip)
+
 
 if __name__ == '__main__':
     main()

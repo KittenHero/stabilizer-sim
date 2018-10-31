@@ -17,15 +17,16 @@ __all__ = [
     'QState', 'Measure',
     'QCircuit', 'ControlledNot', 'Hadamard', 'Phase',
     'PauliX', 'PauliZ', 'ControlledZ', 'Swap',
-    'GeneralPauli'
+    'Conditional', 'GeneralPauli',
 ]
 
 from abc import ABCMeta, abstractmethod, abstractproperty
 from dataclasses import dataclass, InitVar
-from typing import Union, Tuple, List, MutableSequence, Mapping, ClassVar
+from typing import Union, Tuple, List, MutableSequence, Mapping, Callable, ClassVar
 from collections import OrderedDict
-from heapq import merge
 from itertools import chain
+from heapq import merge
+from bisect import insort
 import re
 import random
 import logging
@@ -33,7 +34,7 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-log = logging.FileHandler('debug.log', mode='w')
+log = logging.FileHandler('debug.log', 'w')
 log.setLevel(logging.DEBUG)
 logger.addHandler(log)
 
@@ -561,6 +562,41 @@ class PauliX(CliffordGate):
 
 ######################################################
 
+@dataclass
+class Conditional:
+    '''Conditional gate should be a single qubit clifford'''
+    control: List[int]
+    gate: CliffordGate
+
+    def __str__(self):
+        return f'IF{",".join(map(str, self.control))} {self.gate}'
+
+@dataclass
+class Hybrid(CliffordGate):
+    n: GeneralPauli
+    m: GeneralPauli
+
+    @property
+    def symbol(self):
+        return 'V({n}, {m})'
+
+    def __str__(self):
+        return self.symbol.format(n=self.n, m=self.m)
+
+    def transform_generator(self, g):
+         pn, pm = g.commute(self.n), g.commute(self.m)
+         if not pn and not pm:
+             g.phase ^= 1
+         elif not pn or not pm:
+             g *= self.n
+             g *= self.m
+             if pm: g.phase ^= 1
+
+    def inverse(self, qstate):
+        raise NotImplementedError()
+
+######################################################
+
 class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
     '''For storing and instantiating quantum gates'''
 
@@ -605,19 +641,29 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
                 Controlled-Z on qbit b with qbit a as control
             SWAPa,b :
                 Swap bit a and b
+            IFa[,b,c...] :
+                The next gate is conditional on the measurement result of a[,b,c..]
         '''
         translate = {
             'H': Hadamard, 'S': Phase, 'CX': ControlledNot,
             'M': Measure,  'Z': PauliZ, 'X': PauliX,
-            'CZ': ControlledZ, 'SWAP': Swap
+            'CZ': ControlledZ, 'SWAP': Swap,
         }
         args = re.compile(r'([\d,]+)')
         gates = []
+        control = None
         for spec in src.upper().split():
             gate_spec, target, _ = args.split(spec)
             target = int(target) if ',' not in target else tuple(map(int, target.split(',')))
-            gates.append( translate[gate_spec](target) )
-        
+            if gate_spec == 'IF':
+                control = target if isinstance(target, tuple) else (target,)
+            elif control is not None:
+                gates.append( Conditional(list(control), translate[gate_spec](target)) )
+                control = None
+            else:
+                gates.append( translate[gate_spec](target) )
+                control = None
+
         return cls(gates)
 
     def __init__(self, gates):
@@ -625,10 +671,10 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.gates})'
-    
+
     def __str__(self):
         return  '\n'.join(map(str, self.gates))
-   
+
     def __getitem__(self, key):
         if isinstance(key, slice):
             return self.__class__(self.gates[key])
@@ -653,59 +699,75 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
     def __iter__(self):
         return iter(self.gates)
 
-    def to_pbc(self, nbits):
+    def hybrid_coroutine(self, nbits: int, oracle: Callable[[GeneralPauli], int]=lambda p: int(input(f'{p} : '))):
+        '''
+        Transform a n + k qubits circuit to a hybrid PBC circuit
+        The where the first nbits of the original circuit is initialised as |0⟩
+        and the remaining bits are initilised as |A⟩
+
+        The oracle must provide the measurement result of the partially
+        transform circuit on k bits with the general pauli applied in succession
+
+        returns the measurement results in corresponding order of the origin circuit
+        '''
         logger.debug(f'Transforming {self!r} to pbc')
+
         logger.info('Replacing basis measurements by stabilizers')
-        measurements = [(i, m.as_pauli()) for i, m in enumerate(self) if isinstance(m, Measure)]
-
-        logger.info('Commute out cliffords to the right')
-        cliffords = [(i, gate) for i, gate in enumerate(self) if isinstance(gate, CliffordGate)]
-
-        logger.warning('Conditional gates unimplemented')
-        for i, gate in reversed(cliffords):
-            for j, pauli in reversed(measurements):
-                if j < i: break
-                logger.debug(f'commuting {i}: {gate} through {j}: {pauli}')
-                gate.transform_generator(pauli)
-                logger.debug(f'result: {pauli}')
+        measurements, gates, conditional = [], [], []
+        control = {}
+        for i, component in enumerate(self):
+            if isinstance(component, Measure):
+                measurements.append((i, component.as_pauli()))
+                control[component.target] = i
+            elif isinstance(component, Conditional):
+                if any(c not in control for c in component.control):
+                    raise ValueError('conditional before measurement', component, control)
+                else:
+                    conditional.append((i, component))
+            else:
+                gates.append((i, component))
 
         logger.info('Prepending Z measurements')
         prepended = [Measure(i).as_pauli() for i in range(nbits)]
 
-        logger.info('Commuting out anti-commuting gates')
-        for i, (ii, pauli) in enumerate(measurements):
+        I = GeneralPauli.identity()
+        logger.info('Commuting measurements to the left')
+        for j, pauli in measurements:
+            for i, gate in reversed(gates):
+                if j < i: continue
+                logger.debug(f'commuting {i}-{gate} through {j}-{pauli}')
+                gate.transform_generator(pauli)
+                logger.debug(f'result->{pauli}')
+
             for pz in prepended:
                 if pauli.commute(pz): continue
                 outcome = random.randint(0, 1)
                 pauli.phase ^= outcome
-                measurements[i] = (ii, outcome)
-                logger.debug(f'{pauli} anti-commutes, choosen random outcome: {outcome}')
-                for _, other in measurements[i + 1:]:
-                    pn, pm = other.commute(pz), other.commute(pauli)
-                    logger.debug(f'commuting through {other}')
-                    if pn and pm: continue
-                    elif not pn and not pm:
-                        other.phase ^= 1
-                    else:
-                        other *= pz
-                        other *= pauli
-                        if pm: other.phase ^= 1
-                    logger.debug(f'resulting {other}')
+                self[j].outcome = outcome
+                logger.debug(f'{pauli} anti-commutes\nchoosen random outcome: {outcome}\nreplacing with hybrid gate')
+                gates.insert(0, (j, Hybrid(pz, pauli)))
+                yield outcome
                 break
-
-        logger.info('build table for computing dependent measurements')
-        logger.warning('Dependent pauli unimplemented')
-        for i, (ii, m) in enumerate(measurements):
-            if isinstance(m, int): continue
-            copy = GeneralPauli(m.values(), m.keys(), m.phase)
-            # outcome for first n bits is always 0
-            for j, p in copy.items():
-                if j >= nbits: break
-                if p != GeneralPauli.Z: continue
-                logger.debug(f'{ii}:{j} is {GeneralPauli.pauli_str[p]} setting to I')
-                m[j] = GeneralPauli.I
-            if m == GeneralPauli.identity():
-                measurements[i] = (ii, 0)
-
-        logger.debug(f'final result: {measurements}')
-        return measurements
+            else:
+                pauli.update(dict.fromkeys(range(nbits), pauli.I))
+                if pauli == I:
+                    logger.debug(f'dependent measurement')
+                    outcome = 0
+                else:
+                    logger.info(f'measuring {pauli}')
+                    outcome = oracle(pauli)
+                self[j].outcome = outcome
+                yield outcome
+            for k_cg in conditional[:]:
+                k, cg = k_cg
+                for c in cg.control:
+                    c = control[c]
+                    if j < c: break
+                    elif self[j].outcome == 1: continue
+                    else:
+                        logger.debug(f'control bit off\nremoving {cg}')
+                        conditional.remove(k_cg)
+                        break
+                else:
+                    conditional.remove(k_cg)
+                    insort(gates, (k, cg.gate))

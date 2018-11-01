@@ -5,12 +5,19 @@ where:
     m is the number of operations in the clifford group
     n is the number of qubits
 
-This simulation uses sparse encoding for simplicity,
+The simulation is extended with the PBC model of
+hybrid simulation on k qubit of a quantum computer
+on n + k qubit
+
+This tableau simulation uses sparse encoding for simplicity,
 as more efficient solutions are available elsewhere.
-Original: scottaaronson.com/chp
+: scottaaronson.com/chp
 
 [0] Nielsen and Chuagn, Quantum Computing and Quantum Information, Chapter 10
-[1] Aaronson and Gottesman, Improved Simulation of Stabilizer Circuit, arxiv:quant-ph/0406196
+[1] Aaronson and Gottesman, Improved Simulation of Stabilizer Circuit,
+    arxiv:quant-ph/0406196
+[2] Bravyi, Smith and Smolin, Trading classical and quantum computational resources,
+    axiv:1506.01396
 '''
 
 __all__ = [

@@ -62,8 +62,8 @@ class GeneralPauli(OrderedDict):
         for k, (sk, gk) in self.joint_items(self, g):
             prod = sk ^ gk
             self[k] = prod
-            phase = (phase + self.levi_civita_mod4(gk, sk, prod)) & 0b11
-        self.phase ^= (phase >> 1) ^ g.phase
+            phase = (phase + self.levi_civita_mod4(sk, gk, prod)) & 0b11
+        self.phase = (phase + self.phase + g.phase) & 0b11
         return self
 
     @classmethod
@@ -95,9 +95,9 @@ class GeneralPauli(OrderedDict):
         return ''.join(self.pauli_str.get(self[i]) for i in range(n))
     
     def __repr__(self):
-        return f'''{self.__class__.__name__}('{
-            ''.join(map(self.pauli_str.get, self.values()))}', {list(self.keys())}, phase={self.phase
-        })'''
+        return f'''('{"-" if self.phase else "+"}{
+            ''.join(map(self.pauli_str.get, self.values()))
+        }', {list(self.keys())})'''
 
     def __getitem__(self, key):
         return self.get(key, self.I)
@@ -235,7 +235,7 @@ class QState:
         x_count = self.gaussian()
         if x_count > max_ket: raise ValueError('State is too big to be written')
         def gen_basis(gen):
-            phase = (sum(p == GeneralPauli.Y for p in gen.values()) + 2*gen.phase) & 0b11
+            phase = (sum(p == GeneralPauli.Y for p in gen.values()) + gen.phase) & 0b11
             pre = {0: '+', 1: '+i', 2: '-', 3: '-i'}[phase]
             bits = ''.join('1' if g in 'XY' else '0' for g in gen.as_str(n))
             return f'{pre}|{bits}⟩'
@@ -247,7 +247,7 @@ class QState:
             for j in reversed(range(n)):
                 if not g[j] & GeneralPauli.Z: continue
                 k = j
-                if gen[j] & GeneralPauli.X: phase ^= 1
+                if gen[j] & GeneralPauli.X: phase ^= 2
             if phase: gen[k] ^= GeneralPauli.X
         bases = [gen_basis(gen)]
         # This produces the remaining x_count^2 - 1 kets
@@ -262,7 +262,7 @@ class QState:
 
     def __str__(self):
         '''matrix representation of the destabilizer and stabilizer'''
-        phase_str = { 0: '+', 1: '-' }
+        phase_str = { 0: '+', 1: '+i', 2: '-', 3: '-i' }
         n = len(self)
         d_str = []
         s_str = []
@@ -381,7 +381,7 @@ class ControlledNot(CliffordGate):
         g[a] ^= (gb & GeneralPauli.Z)
         g[b] ^= (ga & GeneralPauli.X)
 
-        g.phase ^= 1 if (ga, gb) in PHASE_CHANGE else 0
+        g.phase ^= 2 if (ga, gb) in PHASE_CHANGE else 0
 
     def inverse(self, qstate):
         return self(qstate)
@@ -411,7 +411,7 @@ class Hadamard(CliffordGate):
         src = g[n]
         # swap XZ
         g[n] = (src & GeneralPauli.X and GeneralPauli.Z) | (src & GeneralPauli.Z and GeneralPauli.X)
-        g.phase ^= 1 if src == GeneralPauli.Y else 0
+        g.phase ^= 2 if src == GeneralPauli.Y else 0
 
     def inverse(self, qstate):
         return self(qstate)
@@ -441,7 +441,7 @@ class Phase(CliffordGate):
         src = g[n]
         # z ^= x
         g[n] ^= (src & GeneralPauli.X) and GeneralPauli.Z
-        g.phase ^= 1 if src == GeneralPauli.Y else 0
+        g.phase ^= 2 if src == GeneralPauli.Y else 0
 
     def inverse(self, qstate):
         return self(
@@ -479,7 +479,7 @@ class ControlledZ(CliffordGate):
 
         g[a] ^= (gb & GeneralPauli.X) and GeneralPauli.Z
         g[b] ^= (ga & GeneralPauli.X) and GeneralPauli.Z
-        g.phase ^= 1 if ga & gb & GeneralPauli.X else 0
+        g.phase ^= 2 if ga & gb & GeneralPauli.X else 0
 
     def inverse(self, qstate):
         return self(qstate)
@@ -530,7 +530,7 @@ class PauliZ(CliffordGate):
         return 'Z'
 
     def transform_generator(self, g):
-        g.phase ^= 1 if g[self.target] & GeneralPauli.X else 0
+        g.phase ^= 2 if g[self.target] & GeneralPauli.X else 0
 
     def inverse(self, qstate):
         return self(qstate)
@@ -555,7 +555,7 @@ class PauliX(CliffordGate):
         return 'X'
 
     def transform_generator(self, g):
-        g.phase ^= 1 if g[self.target] & GeneralPauli.Z else 0
+        g.phase ^= 2 if g[self.target] & GeneralPauli.Z else 0
 
     def inverse(self, qstate):
         return self(qstate)
@@ -586,11 +586,11 @@ class Hybrid(CliffordGate):
     def transform_generator(self, g):
          pn, pm = g.commute(self.n), g.commute(self.m)
          if not pn and not pm:
-             g.phase ^= 1
+             g.phase ^= 2
          elif not pn or not pm:
              g *= self.n
              g *= self.m
-             if pm: g.phase ^= 1
+             if pm: g.phase ^= 2
 
     def inverse(self, qstate):
         raise NotImplementedError()
@@ -710,7 +710,7 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
 
         returns the measurement results in corresponding order of the origin circuit
         '''
-        logger.debug(f'Transforming {self!r} to pbc')
+        logger.debug(f'Transforming {self} to pbc')
 
         logger.info('Replacing basis measurements by stabilizers')
         measurements, gates, conditional = [], [], []
@@ -731,20 +731,20 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
         prepended = [Measure(i).as_pauli() for i in range(nbits)]
 
         I = GeneralPauli.identity()
-        logger.info('Commuting measurements to the left')
+        logger.info('Commuting measurements')
         for j, pauli in measurements:
             for i, gate in reversed(gates):
                 if j < i: continue
-                logger.debug(f'commuting {i}-{gate} through {j}-{pauli}')
+                logger.debug(f'{i}:{gate}\t{j}:{pauli}')
                 gate.transform_generator(pauli)
-                logger.debug(f'result->{pauli}')
+                logger.debug(f'=> {pauli}')
 
             for pz in prepended:
                 if pauli.commute(pz): continue
                 outcome = random.randint(0, 1)
                 pauli.phase ^= outcome
                 self[j].outcome = outcome
-                logger.debug(f'{pauli} anti-commutes\nchoosen random outcome: {outcome}\nreplacing with hybrid gate')
+                logger.debug(f'{pauli} anti-commutes\nchoosen outcome: {outcome}\nreplacing with hybrid')
                 gates.insert(0, (j, Hybrid(pz, pauli)))
                 yield outcome
                 break

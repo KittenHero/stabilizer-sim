@@ -600,7 +600,7 @@ class Hybrid(CliffordGate):
              if pm: g.phase ^= 2
 
     def inverse(self, qstate):
-        raise NotImplementedError()
+        raise self(qstate)
 
 ######################################################
 
@@ -610,6 +610,10 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
     def __call__(self, qstate):
         '''Apply the gates of the circuit in-place on the given state'''
         for gate in self:
+            if isinstance(gate, Conditional):
+                if len(gate.control) != sum(Measure(i)(qstate) for i in gate.control):
+                    continue
+                gate = gate.gate
             gate(qstate)
         return qstate
 
@@ -617,6 +621,10 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
         '''Apply the inverse of the gates of the circuit
         in reverse order in-place on the given stae'''
         for gate in reversed(self):
+            if isinstance(gate, Conditional):
+                if len(gate.control) != sum(Measure(i)(qstate) for i in gate.control):
+                    continue
+                gate = gate.gate
             gate.inverse(qstate)
         return qstate
 

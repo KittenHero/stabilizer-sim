@@ -57,6 +57,7 @@ class GeneralPauli(OrderedDict):
     X: ClassVar[int] = 0b10
     Y: ClassVar[int] = 0b11
     pauli_str: ClassVar[Mapping[int, str]] = { I: 'I', X: 'X', Y: 'Y', Z:'Z' }
+    phase_str: ClassVar[Mapping[int, str]] = { 0: ' +', 1: '+i', 2: ' -', 3: '-i' }
 
     def __post_init__(self, components, targets):
         # allows initializing components from string
@@ -99,10 +100,10 @@ class GeneralPauli(OrderedDict):
         ) & 0b1 == 0
 
     def as_str(self, n):
-        return ''.join(self.pauli_str.get(self[i]) for i in range(n))
+        return self.phase_str[self.phase] + ''.join(self.pauli_str.get(self[i]) for i in range(n))
     
     def __repr__(self):
-        return f'''('{"-" if self.phase else "+"}{
+        return f'''({self.phase_str[self.phase]}'{
             ''.join(map(self.pauli_str.get, self.values()))
         }', {list(self.keys())})'''
 
@@ -123,6 +124,10 @@ class GeneralPauli(OrderedDict):
     def __eq__(self, other):
         if not isinstance(other, self.__class__): return NotImplemented
         return self.phase == other.phase and self.items() == other.items()
+
+    def apply_clifford(self, gate):
+        gate.transform_generator(self)
+        return self
 
 def merge_uniq(*items):
     prev = None
@@ -244,7 +249,7 @@ class QState:
         def gen_basis(gen):
             phase = (sum(p == GeneralPauli.Y for p in gen.values()) + gen.phase) & 0b11
             pre = {0: '+', 1: '+i', 2: '-', 3: '-i'}[phase]
-            bits = ''.join('1' if g in 'XY' else '0' for g in gen.as_str(n))
+            bits = ''.join('1' if g in 'XY' else '0' for g in gen.as_str(n)[2:])
             return f'{pre}|{bits}⟩'
         # This produces the 'first' ket
         gen = GeneralPauli.identity()
@@ -269,17 +274,14 @@ class QState:
 
     def __str__(self):
         '''matrix representation of the destabilizer and stabilizer'''
-        phase_str = { 0: '+', 1: '+i', 2: '-', 3: '-i' }
         n = len(self)
         d_str = []
         s_str = []
         sep = '{}' + '-' * n + '\n'
         for s_gen, d_gen in zip(self.stab, self.destab):
-            d_str.append(phase_str[d_gen.phase])
             d_str.extend(d_gen.as_str(n))
             d_str.append('\n')
 
-            s_str.append(phase_str[s_gen.phase])
             s_str.extend(s_gen.as_str(n))
             s_str.append('\n')
 
@@ -600,7 +602,7 @@ class Hybrid(CliffordGate):
              if pm: g.phase ^= 2
 
     def inverse(self, qstate):
-        raise self(qstate)
+        return self(qstate)
 
 ######################################################
 
@@ -751,13 +753,14 @@ class QCircuit(MutableSequence[Union[Measure, CliffordGate]]):
             for i, gate in reversed(gates):
                 if j < i: continue
                 logger.debug(f'{i}:{gate}\t{j}:{pauli}')
-                gate.transform_generator(pauli)
+                # commuting stabilzer backwards rather than forwards
+                gate.inverse(pauli)
                 logger.debug(f'=> {pauli}')
 
             for pz in prepended:
                 if pauli.commute(pz): continue
                 outcome = random.randint(0, 1)
-                pauli.phase ^= outcome
+                pauli.phase ^= (outcome << 1)
                 self[j].outcome = outcome
                 logger.debug(f'{pauli} anti-commutes\nchoosen outcome: {outcome}\nreplacing with hybrid')
                 gates.insert(0, (j, Hybrid(pz, pauli)))
